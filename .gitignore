@@ -1,0 +1,29 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+.venv/
+
+# Uploads and outputs
+uploads_temp/
+uploads_prediction/
+user_preprocessed_output.csv
+predictions_output.csv
+Preprocess_files/
+sample/
+image_file/
+
+# Model and scaler binaries
+*.h5
+*.pkl
+
+# Sample and test data (fetched or local testing only)
+Different_input_datasets/
+sample_dataset_for_user/
+test_file/
+
+# macOS cruft
+.DS_Store
+
