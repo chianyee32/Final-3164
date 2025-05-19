@@ -1,9 +1,29 @@
 import os
 import pandas as pd
 import numpy as np
+import requests                                # ← new
 from rdkit import Chem
 from rdkit.Chem import AllChem
 from rdkit.DataStructs import ConvertToNumpyArray
+
+# ─── NEW: S3 URLs from environment ─────────────────────────────────────────────
+CCLE_TRANSCRIPT_URL = os.environ.get("CCLE_TRANSCRIPT_URL")
+CCLE_PROTEIN_URL    = os.environ.get("CCLE_PROTEIN_URL")
+
+
+def _download_if_missing(url: str, dst: str):
+    """
+    Download `url` to local path `dst` if it does not already exist.
+    """
+    if url and not os.path.exists(dst):
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        resp = requests.get(url, stream=True)
+        resp.raise_for_status()
+        with open(dst, "wb") as f:
+            for chunk in resp.iter_content(1024*1024):
+                f.write(chunk)
+        print(f"Downloaded {os.path.basename(dst)} from {url}")
+
 
 def preprocess_user_dataset(
     user_csv_path: str,
@@ -16,6 +36,17 @@ def preprocess_user_dataset(
     4) Generate 256‐bit Morgan fingerprints (radius=2)
     5) Save flattened CSV for prediction
     """
+
+    # 0) Ensure reference CSVs are present (download from S3 if URLs set)
+    _download_if_missing(
+        CCLE_TRANSCRIPT_URL,
+        os.path.join("Preprocess_files", "CCLE_Transcriptomics_cleaned.csv")
+    )
+    _download_if_missing(
+        CCLE_PROTEIN_URL,
+        os.path.join("Preprocess_files", "CCLE_Proteomics_cleaned.csv")
+    )
+
     # 1) Load
     user_df = pd.read_csv(user_csv_path)
     print("Loaded user dataset.")
@@ -27,8 +58,14 @@ def preprocess_user_dataset(
         raise ValueError(f"Missing required columns: {missing}")
 
     # 3) Omics features check
-    trans_ref = set(pd.read_csv("Preprocess_files/CCLE_Transcriptomics_cleaned.csv", nrows=0).columns)
-    prot_ref  = set(pd.read_csv("Preprocess_files/CCLE_Proteomics_cleaned.csv",   nrows=0).columns)
+    trans_ref = set(pd.read_csv(
+        os.path.join("Preprocess_files", "CCLE_Transcriptomics_cleaned.csv"),
+        nrows=0
+    ).columns)
+    prot_ref  = set(pd.read_csv(
+        os.path.join("Preprocess_files", "CCLE_Proteomics_cleaned.csv"),
+        nrows=0
+    ).columns)
     feats = set(user_df.columns) - required
 
     missing_trans = trans_ref - feats
@@ -60,7 +97,6 @@ def preprocess_user_dataset(
     for smi in final_df["ISOSMILES"]:
         mol = Chem.MolFromSmiles(smi)
         if mol:
-            # GetMorganFingerprintAsBitVect is available in rdkit-pypi 2022.x
             bitvect = AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=256)
             arr = np.zeros((256,), dtype=np.int64)
             ConvertToNumpyArray(bitvect, arr)
