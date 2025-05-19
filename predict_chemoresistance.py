@@ -1,25 +1,40 @@
 # File: predict_chemoresistance.py
 
-import pandas as pd
-import joblib
+import os
 import sys
+import joblib
+import requests           # ← new
+import pandas as pd
 from tensorflow.keras.models import load_model
-from preprocessing_model import preprocess_user_dataset;
+from preprocessing_model import preprocess_user_dataset
 import traceback
 
+# ─── NEW: read S3 URLs from env ────────────────────────────────────────────────
+MODEL_URL  = os.environ.get("MODEL_URL")
+SCALER_URL = os.environ.get("SCALER_URL")
 
-# Step 1: Load the trained model and scaler
+def _download_if_missing(url: str, dst: str):
+    if url and not os.path.exists(dst):
+        resp = requests.get(url, stream=True)
+        resp.raise_for_status()
+        with open(dst, "wb") as f:
+            for chunk in resp.iter_content(1024*1024):
+                f.write(chunk)
+        print(f"Downloaded {os.path.basename(dst)} from {url}")
+
+# ─── Step 1: Load the trained model and scaler ────────────────────────────────
 def load_pipeline():
-    model = load_model('4_cancers_chemoresistance_model.h5')
+    # ─── NEW: pull down from S3 if URLs provided ─────────────────────────────
+    _download_if_missing(MODEL_URL,  "4_cancers_chemoresistance_model.h5")
+    _download_if_missing(SCALER_URL, "scaler.pkl")
+
+    model  = load_model('4_cancers_chemoresistance_model.h5')
     scaler = joblib.load('scaler.pkl')
     return model, scaler
 
 # Utility: Align input features to match training features
 def align_features(X_new, expected_features):
-
-
     missing_features = list(set(expected_features) - set(X_new.columns))
-
     if missing_features:
         print(f"Adding missing features: {missing_features[:5]} ... (total: {len(missing_features)})")
         missing_df = pd.DataFrame(0.0, index=X_new.index, columns=missing_features)
@@ -34,7 +49,6 @@ def align_features(X_new, expected_features):
     print(f"Feature alignment complete. Total features: {X_new.shape[1]}")
 
     return X_new
-
 
 # Step 2: Load and preprocess new data
 def preprocess_new_data(file_path: str, scaler):
@@ -51,7 +65,6 @@ def preprocess_new_data(file_path: str, scaler):
             print("Scaler does not have attribute 'feature_names_in_'. Feature alignment skipped.")
 
         X_new_scaled = scaler.transform(X_new)
-
         return data, X_new_scaled
 
     except FileNotFoundError:
@@ -83,11 +96,12 @@ def save_predictions(original_data, predictions, output_file='predictions_output
 
     results_df['Sensitivity'] = results_df['Predicted_LN_IC50'].apply(classify)
 
-    
     # Optional: clean & sort
     before = results_df.shape[0]
-    results_df = results_df.drop_duplicates(subset=['DRUG_ID', 'COSMIC_ID', 'CCLE_Name', 'DRUG_NAME', 'CANCER_TYPE'], keep='first')
-    results_df = results_df.sort_values(by='Predicted_LN_IC50', ascending=True)
+    results_df = results_df.drop_duplicates(
+        subset=['DRUG_ID', 'COSMIC_ID', 'CCLE_Name', 'DRUG_NAME', 'CANCER_TYPE'],
+        keep='first'
+    ).sort_values(by='Predicted_LN_IC50', ascending=True)
     after = results_df.shape[0]
 
     if before != after:
@@ -96,16 +110,15 @@ def save_predictions(original_data, predictions, output_file='predictions_output
     results_df.to_csv(output_file, index=False)
     print(f"Predictions saved to {output_file}")
 
-
 # Step 5: Main function
 def main(input_file_path):
     try:
         print(f"Starting prediction for: {input_file_path}")
-        
+
         # Step 1: Preprocess input
         df = preprocess_user_dataset(input_file_path)
 
-        # Step 2: Load model and scaler
+        # Step 2: Load model and scaler (downloads from S3 if URLs set)
         model, scaler = load_pipeline()
 
         # Step 3: Preprocess new data for model input
@@ -116,19 +129,15 @@ def main(input_file_path):
 
         # Step 5: Save results
         save_predictions(df, predictions)
-
         print("Prediction completed and saved to predictions_output.csv")
 
     except Exception as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)
 
-
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python predict_chemoresistance.py <input_file_path>", file=sys.stderr)
         sys.exit(1)
-
     input_file = sys.argv[1]
     main(input_file)
-
