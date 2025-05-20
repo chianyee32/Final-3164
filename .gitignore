@@ -12,7 +12,6 @@ uploads_prediction/
 user_preprocessed_output.csv
 predictions_output.csv
 Preprocess_files/
-sample/
 
 # Model and scaler binaries
 *.h5
