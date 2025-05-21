@@ -88,32 +88,41 @@ def preprocess_user_dataset(
             raise ValueError(f"Column '{col}' must be numeric.")
     print("Numeric data check passed.")
 
-    # Deduplicate
-    final_df = user_df.drop_duplicates().reset_index(drop=True)
+    # Load cleaned files
+    print("Loading reference files...")
 
-    # 4) Morgan fingerprints (radius=2, 256-bit)
+    # Determine path based on available columns
+    if 'ISOSMILES' in user_df.columns:
+        print("User dataset contains ISOSMILES. No merging needed.")
+        final_merged = user_df.copy()
+
+    final_merged = final_merged.drop_duplicates().reset_index(drop=True)
+
+    # Generate Morgan fingerprints
     print("Generating Morgan fingerprints...")
-    fps = []
-    for smi in final_df["ISOSMILES"]:
-        mol = Chem.MolFromSmiles(smi)
-        if mol:
-            bitvect = AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=256)
-            arr = np.zeros((256,), dtype=np.int64)
-            ConvertToNumpyArray(bitvect, arr)
-            fps.append(arr)
+    arr = []
+    morgan_generator = AllChem.GetMorganGenerator(radius=2, fpSize=256)
+
+    for smiles in final_merged['ISOSMILES']:
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is not None:
+            fp = morgan_generator.GetFingerprint(mol)
+            fp_array = np.zeros((256,), dtype=np.int64)
+            ConvertToNumpyArray(fp, fp_array)
+            arr.append(fp_array)
         else:
-            print(f"Invalid SMILES: {smi}")
-            fps.append(np.zeros((256,), dtype=np.int64))
+            print(f"Invalid SMILES: {smiles}")
+            arr.append(np.zeros((256,), dtype=np.int64))
 
-    fps_df = pd.DataFrame(fps)
+    # Attach fingerprint data
+    fingerprints_df = pd.DataFrame(arr)
+    df_with_fps = final_merged.join(fingerprints_df)
 
-    # Merge and drop raw SMILES column
-    out_df = pd.concat([final_df.reset_index(drop=True), fps_df], axis=1)
-    drop_cols = [c for c in ("PubCHEM","ISOSMILES") if c in out_df.columns]
-    out_df = out_df.drop(columns=drop_cols)
+    # Clean-up optional fields
+    df_with_fps = df_with_fps.drop(columns=[col for col in ['PubCHEM', 'ISOSMILES'] if col in df_with_fps.columns])
 
-    # 5) Save
-    out_df.to_csv(output_csv_path, index=False)
-    print(f"Preprocessed file saved to: {output_csv_path}")
+    # Save output
+    df_with_fps.to_csv(output_csv_path, index=False)
+    print(f"Final preprocessed file saved to: {output_csv_path}")
 
-    return out_df
+    return df_with_fps

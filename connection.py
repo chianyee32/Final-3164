@@ -1,89 +1,91 @@
-# File: connection.py
-
 import os
 import sys
 import subprocess
-import re
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 
-# ─── Force UTF-8 on Windows to avoid encoding errors ───────────────────────────
-if sys.platform.startswith("win"):
-    import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
-
-# Setup directories
-BASE_DIR          = os.path.dirname(__file__)
-UPLOAD_FOLDER     = os.path.join(BASE_DIR, "uploads_temp")
-PREDICTION_FOLDER = os.path.join(BASE_DIR, "uploads_prediction")
-
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(PREDICTION_FOLDER, exist_ok=True)
-
-# Initialize Flask
+# Initialize app, using the project root for static files
+BASE_DIR = os.path.dirname(__file__)
 app = Flask(__name__, static_folder=BASE_DIR, static_url_path="")
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
-@app.route("/", methods=["GET"])
+# Folder to temporarily store uploads
+UPLOAD_TEMP_DIR = os.path.join(BASE_DIR, "uploads_temp")
+os.makedirs(UPLOAD_TEMP_DIR, exist_ok=True)
+app.config["UPLOAD_FOLDER"] = UPLOAD_TEMP_DIR
+
+# Folder for storing prediction results (if needed)
+PREDICTION_FOLDER = os.path.join(BASE_DIR, "uploads_prediction")
+os.makedirs(PREDICTION_FOLDER, exist_ok=True)
+app.config["PREDICTION_FOLDER"] = PREDICTION_FOLDER
+
+@app.route('/')
 def index():
-    return app.send_static_file("introduction.html")
+    # Serve introduction.html directly from the static folder
+    return app.send_static_file('introduction.html')
 
-@app.route("/upload_prediction", methods=["POST"])
+@app.route('/upload_prediction', methods=['POST'])
 def upload_prediction():
-    file = request.files.get("file")
-    if not file or not file.filename:
-        return jsonify(error="No file uploaded"), 400
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
 
-    # Save upload
-    in_path = os.path.join(UPLOAD_FOLDER, file.filename)
-    file.save(in_path)
-    print(f"[UPLOAD] Saved file: {in_path}", file=sys.stderr)
+    uploaded_file = request.files["file"]
+    if uploaded_file.filename == "":
+        return jsonify({"error": "No file selected"}), 400
+    
+    # Clear previous uploads
+    for existing in os.listdir(app.config["UPLOAD_FOLDER"]):
+        path = os.path.join(app.config["UPLOAD_FOLDER"], existing)
+        if os.path.isfile(path):
+            os.remove(path)
 
-    # Run prediction script
-    proc = subprocess.run(
-        [sys.executable, os.path.join(BASE_DIR, "predict_chemoresistance.py"), in_path],
-        capture_output=True,
-        text=True
-    )
+    # Save the new upload
+    file_path = os.path.join(app.config["UPLOAD_FOLDER"], uploaded_file.filename)
+    uploaded_file.save(file_path)
 
-    # Filter out TensorFlow and time-stamp lines from stderr
-    raw_err = proc.stderr or ""
-    filtered = [l for l in raw_err.splitlines()
-                if l.strip() and
-                   not re.match(r"^\d{4}-\d{2}-\d{2}", l) and
-                   "tensorflow" not in l.lower()]
-    user_error = filtered[-1].strip() if filtered else raw_err.strip()
+    try:
+        # Run the prediction script with the same Python interpreter
+        python_exe = sys.executable
+        script_path = os.path.join(BASE_DIR, "predict_chemoresistance.py")
 
-    # Log for debugging
-    out = proc.stdout.strip()
-    if out:
-        print("[PREDICT STDOUT]", out, file=sys.stderr)
-    if user_error:
-        print("[PREDICT STDERR]", user_error, file=sys.stderr)
+        result = subprocess.run(
+            [python_exe, script_path, file_path],
+            cwd=BASE_DIR,
+            capture_output=True,
+            text=True
+        )
 
-    # On failure, only return the cleaned user_error
-    if proc.returncode != 0:
-        return jsonify(error="Prediction failed", details=user_error), 400
+        # Log output
+        print("✅ Prediction Output:", result.stdout)
+        print("⚠️ Prediction Error (if any):", result.stderr)
 
-    # Move the predictions file
-    src = os.path.join(BASE_DIR, "predictions_output.csv")
-    dst = os.path.join(PREDICTION_FOLDER, "predictions_output.csv")
-    if not os.path.exists(src):
-        return jsonify(error="Output missing"), 500
-    os.replace(src, dst)
-    print(f"[OUTPUT] Moved to {dst}", file=sys.stderr)
+        if result.returncode != 0:
+            return jsonify({
+                "error": "Prediction failed.",
+                "details": result.stderr.strip()
+            }), 400
 
-    # Success
-    return jsonify(
-        message="Prediction succeeded",
-        download_url="/download_prediction/predictions_output.csv"
-    )
+        # Build download URL for the generated CSV
+        output_filename = "predictions_output.csv"
+        output_path = os.path.join(BASE_DIR, output_filename)
 
-@app.route("/download_prediction/<name>", methods=["GET"])
-def download_prediction(name):
-    return send_from_directory(PREDICTION_FOLDER, name, as_attachment=True)
+        if not os.path.exists(output_path):
+            return jsonify({"error": "Prediction output file not found."}), 500
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5002))
-    app.run(host="0.0.0.0", port=port, debug=True)
+        return jsonify({
+            "message": "Prediction completed successfully",
+            "file_path": file_path,
+            "output_file": output_filename,
+            "download_url": f"{request.url_root}download_prediction/{output_filename}"
+        })
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/download_prediction/<filename>')
+def download_prediction_file(filename):
+    # Serve the generated file
+    return send_from_directory(BASE_DIR, filename, as_attachment=True)
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
