@@ -1,6 +1,7 @@
 build:
   docker:
+    # tell Heroku which Dockerfile to use
     web: Dockerfile
 
 run:
-  web: python connection.py
+  web: gunicorn --bind 0.0.0.0:${PORT} connection:app
