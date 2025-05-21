@@ -1,6 +1,7 @@
+# heroku.yml
 build:
   docker:
     web: Dockerfile
 
 run:
-  web: python connection.py
+  web: gunicorn --bind 0.0.0.0:$PORT connection:app
