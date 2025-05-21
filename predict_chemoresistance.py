@@ -1,5 +1,3 @@
-# File: predict_chemoresistance.py
-
 import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 import sys
@@ -111,34 +109,3 @@ def save_predictions(original_data, predictions, output_file='predictions_output
     results_df.to_csv(output_file, index=False)
     print(f"Predictions saved to {output_file}")
 
-# Step 5: Main function
-def main(input_file_path):
-    try:
-        print(f"Starting prediction for: {input_file_path}")
-
-        # Step 1: Preprocess input
-        df = preprocess_user_dataset(input_file_path)
-
-        # Step 2: Load model and scaler (downloads from S3 if URLs set)
-        model, scaler = load_pipeline()
-
-        # Step 3: Preprocess new data for model input
-        _, X_scaled = preprocess_new_data("user_preprocessed_output.csv", scaler)
-
-        # Step 4: Predict
-        predictions = make_predictions(model, X_scaled)
-
-        # Step 5: Save results
-        save_predictions(df, predictions)
-        print("Prediction completed and saved to predictions_output.csv")
-
-    except Exception as e:
-        print(str(e), file=sys.stderr)
-        sys.exit(1)
-
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python predict_chemoresistance.py <input_file_path>", file=sys.stderr)
-        sys.exit(1)
-    input_file = sys.argv[1]
-    main(input_file)
